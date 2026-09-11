@@ -14,16 +14,16 @@ from docling.datamodel.base_models import InputFormat
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling_core.types.doc import ImageRefMode
 
-from config import (
+from .config import (
     IMAGE_DESCRIPTION_END,
     IMAGE_DESCRIPTION_START,
     PAGE_BREAK_PLACEHOLDER,
 )
-from latex_cleaning import process_formulas
-from vlm_pipeline import create_pdf_pipeline_options
+from .latex_cleaning import process_formulas
+from .vlm_pipeline import create_pdf_pipeline_options
 
 
-def process_document(pdf_path: Path) -> Any:
+def process_document(pdf_path: Path, use_parallel: bool = True, max_workers: int | None = None, chunksize: int = 1, show_progress: bool = False) -> Any:
 
     converter = DocumentConverter(
         format_options={
@@ -67,6 +67,6 @@ def process_document(pdf_path: Path) -> Any:
     # Nettoyage des formules (Mellea/Mathstral)
     # ========================================================
 
-    content_math = process_formulas(content_end)
+    content_math = process_formulas(content_end, use_parallel=use_parallel, max_workers=max_workers, chunksize=chunksize, show_progress=show_progress)
 
     return content_math

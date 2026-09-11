@@ -16,31 +16,31 @@ vers l'API Ollama.
 | `document_processor.py` | Orchestration : PDF → Markdown → images → formules |
 | `../main.py` | Point d'entrée CLI |
 
-## Ce qui change par rapport au script d'origine
-
-L'appel Mathstral (`call_mathstral`, via `requests.post` sur
-`/api/chat`) est remplacé par une fonction `@generative` Mellea
-(`clean_formula_with_mellea` dans `latex_cleaning.py`) :
-
-- Le docstring de la fonction **est** le prompt (mêmes règles que le
-  `MATH_PROMPT` d'origine).
-- La sortie est contrainte par un schéma Pydantic (`CleanedFormula`),
-  donc toujours structurée (`result.latex`) au lieu de texte brut à
-  re-parser.
-- Le repli sur le nettoyage regex local est conservé si Ollama/le
-  modèle est indisponible ou échoue sur une formule.
-
-La description d'images (Granite Vision) reste gérée nativement par
-Docling via `PictureDescriptionApiOptions` (`vlm_pipeline.py`) — elle
-n'est pas passée par Mellea, Docling appelant directement l'endpoint
-OpenAI-compatible d'Ollama en interne.
-
 ## Installation
 
+Utilise `uv` pour créer un environnement propre et installer les dépendances rapidement :
+
 ```bash
-pip install -r requirements.txt
-# ou : uv pip install -r requirements.txt
+# 1) installer uv si nécessaire
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2) créer l'environnement virtuel
+uv venv
+
+# 3) activer l'environnement
+source .venv/bin/activate
+
+# 4) installer les dépendances du projet
+uv pip install -r requirements.txt
+
+# 5) copier le fichier d'environnement
 cp .env.example .env
+```
+
+Si tu préfères utiliser directement le gestionnaire Python du projet sans créer d'environnement séparé :
+
+```bash
+uv pip install -r requirements.txt
 ```
 
 Assure-toi qu'Ollama tourne et que les modèles sont disponibles :

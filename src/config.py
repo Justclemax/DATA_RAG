@@ -17,20 +17,11 @@ load_dotenv()
 # Ollama
 # ============================================================
 
-OLLAMA_URL = os.getenv(
-    "OLLAMA_URL",
-    "http://localhost:11434",
-)
+OLLAMA_URL = os.getenv("OLLAMA_URL",)
 
-VLM_MODEL = os.getenv(
-    "VLM_MODEL",
-    "granite3.2-vision:latest",
-)
+VLM_MODEL = os.getenv("VLM_MODEL",)
 
-MATH_MODEL = os.getenv(
-    "MATH_MODEL",
-    "mathstral:latest",
-)
+MATH_MODEL = os.getenv("MATH_MODEL")
 
 
 # ============================================================

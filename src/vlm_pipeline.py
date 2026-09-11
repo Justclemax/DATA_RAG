@@ -14,8 +14,8 @@ from docling.datamodel.pipeline_options import (
     PdfPipelineOptions,
 )
 
-from config import OLLAMA_URL, VLM_MODEL
-from prompts import VLM_PROMPT
+from .config import OLLAMA_URL, VLM_MODEL
+from .prompts import VLM_PROMPT
 
 
 def create_picture_description_options() -> PictureDescriptionApiOptions:
