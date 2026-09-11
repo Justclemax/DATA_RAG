@@ -1,16 +1,10 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
 .idea/
-
-
-# Virtual environments
-.venv
-
+.venv/
 .env/
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints/
+.env
+.python-version
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
