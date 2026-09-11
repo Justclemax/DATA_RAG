@@ -3,24 +3,40 @@ Nettoyage des formules LaTeX extraites par Docling.
 
 Deux niveaux de nettoyage :
   1. Un nettoyage regex local, rapide et déterministe (artefacts OCR,
-     '&' parasites, espaces autour des indices/exposants...).
+     '&' parasites, espaces autour des indices/exposants, délimiteurs
+     \\left/\\right mal échappés, tokens hallucinés...).
   2. Un nettoyage sémantique délégué à Mathstral, appelé via Mellea
      (@generative) plutôt qu'un appel HTTP brut : la sortie est
      contrainte par un schéma Pydantic (garantie de recevoir un champ
-     `latex`), ce qui correspond au pattern Instruct-Validate-Repair de
-     Mellea.
+     `latex`) ET validée par deux `Requirement` Mellea avant d'être
+     acceptée (pattern Instruct-Validate-Repair) :
+       - pas de délimiteur \\left/\\right suivi d'une accolade nue
+         (cause de l'erreur de rendu "Missing or unrecognized
+         delimiter for \\left"),
+       - pas de token isolé halluciné du type "\\ tual", "\\ ved".
+     Si la validation échoue, Mellea relance automatiquement Mathstral
+     (RejectionSamplingStrategy) en lui donnant la raison de l'échec
+     avant de nous renvoyer un résultat.
+
+Dans tous les cas, `clean_latex` ré-applique les mêmes corrections en
+local (delimiters + tokens) en toute fin de chaîne : même si les
+retries Mellea s'épuisent sans succès, ces deux classes d'erreurs ne
+peuvent plus se retrouver dans la sortie finale.
 
 Si Ollama/Mathstral n'est pas disponible (serveur éteint, modèle
 manquant...), le module se rabat automatiquement sur le nettoyage
 regex seul, comme le faisait le script d'origine.
 """
 
+import json
 import re
 
 from pydantic import BaseModel, Field
 
 from mellea import MelleaSession, generative
 from mellea.backends.ollama import OllamaModelBackend
+from mellea.stdlib.requirements.requirement import req, simple_validate
+from mellea.stdlib.sampling import RejectionSamplingStrategy
 
 from .config import MATH_MODEL, OLLAMA_URL
 from loguru import logger
@@ -29,6 +45,43 @@ from loguru import logger
 from .parallel_executor import parallel_map
 
 FORMULA_PATTERN = r"\$\$(.*?)\$\$"
+
+# Nombre de tentatives Mellea (génération + réparation) par formule.
+MELLEA_LOOP_BUDGET = 3
+
+
+# ============================================================
+# Motifs de correction / détection partagés entre le nettoyage
+# local (déterministe) et les Requirements Mellea (validation).
+# ============================================================
+
+# \left / \right suivis d'une accolade NON échappée : { ou } au lieu
+# de \{ ou \} -> cause de "Missing or unrecognized delimiter for \left".
+_BAD_DELIMITER_RE = re.compile(r"\\(left|right)([{}])")
+
+# Backslash + espace + mot isolé en minuscules : jamais une vraie
+# commande LaTeX (les commandes suivent directement le backslash),
+# signe d'un token halluciné (ex: "\ tual", "\ ved").
+_STRAY_TOKEN_RE = re.compile(r"\\ ([a-z]{2,})\b")
+
+
+def _fix_left_right_delimiters(latex: str) -> str:
+    """Échappe les accolades nues après \\left/\\right (\\left{ -> \\left\\{)."""
+    return _BAD_DELIMITER_RE.sub(lambda m: f"\\{m.group(1)}\\{m.group(2)}", latex)
+
+
+def _strip_stray_tokens(latex: str) -> str:
+    """Retire les tokens hallucinés du type '\\ tual', '\\ ved'."""
+    return _STRAY_TOKEN_RE.sub("", latex)
+
+
+def _extract_latex(raw_output: str) -> str:
+    """Récupère le champ `latex` d'une sortie JSON structurée, sinon le texte brut."""
+    try:
+        payload = json.loads(raw_output)
+        return payload.get("latex", raw_output)
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        return raw_output
 
 
 # ============================================================
@@ -79,6 +132,44 @@ def clean_latex(latex: str) -> str:
         latex,
     )
 
+    # Corriger \left / \right suivis d'une accolade non échappée
+    # (ex: \left{...\right} -> \left\{...\right\})
+    latex = _fix_left_right_delimiters(latex)
+
+    # Retirer les tokens hallucinés du type "\ tual", "\ ved"
+    latex = _strip_stray_tokens(latex)
+
+    # Corriger les environnements mathématiques non fermés
+    # (ex: \begin{matrix} ... sans \end{matrix}) qui provoquent
+    # des erreurs de parse MathJax du type "Missing \end{matrix}".
+    envs = [
+        "matrix",
+        "pmatrix",
+        "bmatrix",
+        "Bmatrix",
+        "vmatrix",
+        "Vmatrix",
+        "cases",
+        "aligned",
+        "align",
+        "array",
+        "equation",
+        "eqnarray",
+    ]
+    for env in envs:
+        begin_pattern = rf"\\begin\s*\{{\s*{env}\s*\}}"
+        end_pattern = rf"\\end\s*\{{\s*{env}\s*\}}"
+        begin_count = len(re.findall(begin_pattern, latex))
+        end_count = len(re.findall(end_pattern, latex))
+        if begin_count > end_count:
+            latex = latex.rstrip()
+            latex += " " + " ".join([f"\\end{{{env}}}" for _ in range(begin_count - end_count)])
+        elif end_count > begin_count:
+            latex = re.sub(end_pattern, "", latex, count=end_count - begin_count)
+
+    # Recompacter les espaces laissés par les suppressions ci-dessus
+    latex = re.sub(r"\s+", " ", latex)
+
     return latex.strip()
 
 
@@ -95,13 +186,55 @@ class CleanedFormula(BaseModel):
 
 
 # ============================================================
+# Requirements Mellea (Instruct-Validate-Repair)
+# ============================================================
+
+def _latex_delimiters_ok(raw_output: str) -> tuple[bool, str]:
+    latex = _extract_latex(raw_output)
+    if _BAD_DELIMITER_RE.search(latex):
+        return False, (
+            "\\left and \\right must always be followed by a valid, escaped "
+            "delimiter (\\{, \\}, (, ), [, ], |, ., <, >), never a bare "
+            "'{' or '}'. Fix every occurrence and return the full formula again."
+        )
+    return True, ""
+
+
+def _no_stray_tokens_ok(raw_output: str) -> tuple[bool, str]:
+    latex = _extract_latex(raw_output)
+    match = _STRAY_TOKEN_RE.search(latex)
+    if match:
+        return False, (
+            f"Found a suspicious token {match.group(0)!r}: a backslash "
+            "followed by a space and a lowercase word is not a real LaTeX "
+            "command. Do not invent words; remove it and return the full "
+            "formula again."
+        )
+    return True, ""
+
+
+LATEX_REQUIREMENTS = [
+    req(
+        "\\left and \\right must always be followed by a valid, escaped "
+        "delimiter, never a bare '{' or '}'.",
+        simple_validate(_latex_delimiters_ok),
+    ),
+    req(
+        "The output must not contain invented words or stray tokens that "
+        "are not real LaTeX commands.",
+        simple_validate(_no_stray_tokens_ok),
+    ),
+]
+
+
+# ============================================================
 # Appel générative Mellea -> Mathstral
 # ============================================================
 #
 # Le docstring ci-dessous EST le prompt envoyé au modèle (c'est le
 # fonctionnement du décorateur @generative de Mellea : docstring ->
-# prompt, type hints -> schéma de sortie). Il reprend exactement les
-# règles du MATH_PROMPT d'origine.
+# prompt, type hints -> schéma de sortie). Il reprend les règles du
+# MATH_PROMPT d'origine, plus les deux garde-fous validés ci-dessus.
 
 @generative
 def clean_formula_with_mellea(formula: str) -> CleanedFormula:
@@ -112,13 +245,18 @@ def clean_formula_with_mellea(formula: str) -> CleanedFormula:
     Rules:
     - Return valid LaTeX only.
     - Preserve the mathematical meaning exactly.
-    - Do not invent missing symbols.
+    - Do not invent missing symbols or extra words.
     - Do not change variables, indexes, coefficients, or equation numbers.
     - Remove OCR artifacts.
     - Remove misplaced '&' characters.
     - Fix malformed LaTeX commands.
     - Fix broken spaces around subscripts and superscripts.
     - Correct malformed \\frac, \\sum, \\epsilon, etc.
+    - \\left and \\right must always be followed by a valid, escaped
+      delimiter (\\{, \\}, (, ), [, ], |, ., <, >). Never leave a bare
+      '{' or '}' right after \\left or \\right.
+    - Never insert a backslash followed by a space and then a plain
+      word (e.g. "\\ tual", "\\ ved"); that is not valid LaTeX.
     - Keep the original mathematical structure.
     - Do not explain anything.
     - Return only the cleaned LaTeX formula, in the `latex` field.
@@ -135,6 +273,15 @@ def clean_formula_with_mellea(formula: str) -> CleanedFormula:
 
     Output latex field:
     L_{SD} = 1 - \\frac{\\sum_{i=1}^{t} y_i p_i + \\epsilon}{\\sum_{i=1}^{t} y_i + p_i + \\epsilon} \\tag{2}
+
+    Another example (unescaped \\left/\\right delimiters and a
+    hallucinated word to remove):
+
+    Input:
+    version \\ ved \\ L_{Seg} = \\frac{1}{N}\\sum_{i=1}^{N}\\left{-\\log p_{l_i, i}\\right} \\ tual \\ (4)
+
+    Output latex field:
+    L_{Seg} = \\frac{1}{N}\\sum_{i=1}^{N}\\left\\{-\\log p_{l_i, i}\\right\\} \\tag{4}
     """
 
 
@@ -196,24 +343,34 @@ def process_formulas(content: str, use_parallel: bool = True, max_workers: int |
 
     def _clean_formula_worker(formula: str) -> str:
         """Fonction exécutée dans le process worker."""
+
+        session = None
         try:
-            # Tenter de construire une session Mellea locale au worker
+            session = build_session()
+        except Exception as exc:
+            logger.warning(f"Could not initialize Mellea/Ollama session: {exc}")
+
+        if session is not None:
             try:
-                session = build_session()
-            except Exception:
-                session = None
+                res = clean_formula_with_mellea(
+                    session,
+                    formula=formula,
+                    requirements=LATEX_REQUIREMENTS,
+                    strategy=RejectionSamplingStrategy(loop_budget=MELLEA_LOOP_BUDGET),
+                )
+                raw_latex = res.latex
 
-            if session is not None:
-                try:
-                    res = clean_formula_with_mellea(session, formula=formula)
-                    return clean_latex(res.latex)
-                except Exception:
-                    # si Mellea échoue pour cette formule, repli plus bas
-                    pass
+                if _BAD_DELIMITER_RE.search(raw_latex) or _STRAY_TOKEN_RE.search(raw_latex):
+                    logger.warning(
+                        "Mellea/Mathstral output still malformed after "
+                        f"{MELLEA_LOOP_BUDGET} attempts for formula={formula!r}; "
+                        "applying local regex repair."
+                    )
 
-        except Exception:
-            # Garantir que toute exception du worker ne casse pas le flow
-            pass
+                return clean_latex(raw_latex)
+
+            except Exception as exc:
+                logger.warning(f"Mellea/Mathstral error on formula={formula!r}: {exc}")
 
         # Repli: nettoyage regex local
         return clean_latex(formula)
