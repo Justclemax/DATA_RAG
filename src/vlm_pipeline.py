@@ -19,10 +19,24 @@ from .prompts import VLM_PROMPT
 
 
 def create_picture_description_options() -> PictureDescriptionApiOptions:
+    base_url = str(OLLAMA_URL or "").strip().rstrip("/")
+    if not base_url or not base_url.startswith(("http://", "https://")):
+        raise ValueError(
+            "OLLAMA_URL is not configured. Set it in .env or use the default "
+            "http://localhost:11434 before running the PDF pipeline."
+        )
+
+    model_name = str(VLM_MODEL or "").strip()
+    if not model_name:
+        raise ValueError(
+            "VLM_MODEL is not configured. Set it in .env or use the default "
+            "granite3.2-vision:latest."
+        )
+
     return PictureDescriptionApiOptions(
-        url=f"{OLLAMA_URL}/v1/chat/completions",
+        url=f"{base_url}/v1/chat/completions",
         params={
-            "model": VLM_MODEL,
+            "model": model_name,
             "think": False,
             "seed": 42,
             "max_completion_tokens": 256,

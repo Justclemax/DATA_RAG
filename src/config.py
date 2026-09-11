@@ -16,12 +16,13 @@ load_dotenv()
 # ============================================================
 # Ollama
 # ============================================================
+# Valeurs par défaut locales si l'environnement n'est pas encore défini
+# (par exemple lors d'un premier lancement avec `uv run ...`).
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 
-OLLAMA_URL = os.getenv("OLLAMA_URL",)
+VLM_MODEL = os.getenv("VLM_MODEL", "granite3.2-vision:latest")
 
-VLM_MODEL = os.getenv("VLM_MODEL",)
-
-MATH_MODEL = os.getenv("MATH_MODEL")
+MATH_MODEL = os.getenv("MATH_MODEL", "mathstral:latest")
 
 
 # ============================================================
