@@ -23,10 +23,8 @@ from mellea import MelleaSession, generative
 from mellea.backends.ollama import OllamaModelBackend
 
 from .config import MATH_MODEL, OLLAMA_URL
-from loguru import logger
-
-# Parallel helper pour accélérer le nettoyage des formules
 from .parallel_executor import parallel_map
+from loguru import logger
 
 FORMULA_PATTERN = r"\$\$(.*?)\$\$"
 
@@ -168,75 +166,77 @@ def build_session(timeout: float = 120.0) -> MelleaSession:
 # Traitement des formules d'un document
 # ============================================================
 
-def process_formulas(content: str, use_parallel: bool = True, max_workers: int | None = None, chunksize: int = 1, show_progress: bool = False) -> str:
-    """
-    Détecte les formules $$...$$ extraites par Docling et les nettoie.
+def _clean_formula_worker(formula: str) -> str:
+    """Nettoie une formule isolée, avec repli local si Mellea/Ollama échoue."""
+    try:
+        try:
+            session = build_session()
+        except Exception as exc:
+            logger.warning(f"[WARNING] Could not initialize Mellea/Ollama session: {exc}")
+            logger.info("[INFO] Falling back to local regex-only LaTeX cleaning.")
+            session = None
 
-    Cette version peut paralléliser le nettoyage des formules (chaque
-    formule est traitée dans un process séparé). Le worker construit sa
-    propre session Mellea si possible et retombe sur le nettoyage regex
-    local en cas d'échec.
+        if session is not None:
+            try:
+                result = clean_formula_with_mellea(session, formula=formula)
+                cleaned_formula = clean_latex(result.latex)
+                logger.info("[Mellea/Mathstral] Formula cleaned:")
+                logger.info(cleaned_formula)
+                return cleaned_formula
+            except Exception as exc:
+                logger.warning(f"[WARNING] Mellea/Mathstral error: {exc}")
+    except Exception:
+        pass
+
+    fallback = clean_latex(formula)
+    logger.info("[Local fallback] Formula cleaned:")
+    logger.info(fallback)
+    return fallback
+
+
+def process_formulas(
+    content: str,
+    use_parallel: bool = True,
+    max_workers: int | None = None,
+    chunksize: int = 1,
+    show_progress: bool = False,
+) -> str:
+    """
+    Détecte les formules $$...$$ extraites par Docling et les nettoie
+    via Mellea/Mathstral, avec repli sur le nettoyage regex local si le
+    modèle est indisponible ou échoue sur une formule donnée.
 
     Args:
-        content: texte complet du document Markdown/texte.
-        use_parallel: si True, utilise parallel_map pour traiter en parallèle.
-        max_workers: nombre max de workers (None -> os.cpu_count()).
-        chunksize: taille de lot pour l'envoi aux workers (voir parallel_map).
-        show_progress: si True et si tqdm disponible, affiche la progression.
-
-    Returns:
-        Le contenu avec chaque formule nettoyée et replacée.
+        content: document markdown complet.
+        use_parallel: active la parallélisation via ProcessPoolExecutor.
+        max_workers: nombre de workers, par défaut le CPU count.
+        chunksize: taille de lot envoyée aux workers.
+        show_progress: affiche une barre de progression si tqdm est présent.
     """
-
     matches = list(re.finditer(FORMULA_PATTERN, content, flags=re.DOTALL))
     if not matches:
         return content
 
-    originals = [m.group(1).strip() for m in matches]
+    originals = [match.group(1).strip() for match in matches]
 
-    def _clean_formula_worker(formula: str) -> str:
-        """Fonction exécutée dans le process worker."""
-        try:
-            # Tenter de construire une session Mellea locale au worker
-            try:
-                session = build_session()
-            except Exception:
-                session = None
-
-            if session is not None:
-                try:
-                    res = clean_formula_with_mellea(session, formula=formula)
-                    return clean_latex(res.latex)
-                except Exception:
-                    # si Mellea échoue pour cette formule, repli plus bas
-                    pass
-
-        except Exception:
-            # Garantir que toute exception du worker ne casse pas le flow
-            pass
-
-        # Repli: nettoyage regex local
-        return clean_latex(formula)
-
-    # Exécuter en parallèle ou séquentiellement selon use_parallel
     if use_parallel and len(originals) > 1:
-        cleaned_list = parallel_map(_clean_formula_worker, originals, max_workers=max_workers, chunksize=chunksize, show_progress=show_progress)
+        cleaned_formulas = parallel_map(
+            _clean_formula_worker,
+            originals,
+            max_workers=max_workers,
+            chunksize=chunksize,
+            show_progress=show_progress,
+        )
     else:
-        cleaned_list = [_clean_formula_worker(f) for f in originals]
+        cleaned_formulas = [_clean_formula_worker(formula) for formula in originals]
 
-    # Normaliser les éventuelles exceptions retournées
-    for i, item in enumerate(cleaned_list):
-        if isinstance(item, Exception):
-            cleaned_list[i] = clean_latex(originals[i])
-
-    # Reconstruire le contenu en remplaçant chaque match par la formule nettoyée
     parts: list[str] = []
     last_end = 0
-    for m, cleaned in zip(matches, cleaned_list):
-        start, end = m.span()
+    for match, cleaned_formula in zip(matches, cleaned_formulas):
+        start, end = match.span()
         parts.append(content[last_end:start])
-        parts.append(f"\n\n$$\n{cleaned}\n$$\n\n")
+        parts.append(f"\n\n$$\n{cleaned_formula}\n$$\n\n")
         last_end = end
-    parts.append(content[last_end:])
 
+    parts.append(content[last_end:])
     return "".join(parts)

@@ -5,7 +5,10 @@ Orchestration du traitement d'un PDF :
   2. Marquage des descriptions d'images générées par le VLM.
   3. Nettoyage des formules mathématiques via Mellea/Mathstral.
 """
-
+from docling.datamodel.pipeline_options import (
+    PdfPipelineOptions,
+    NemotronOcrOptions,
+)
 from pathlib import Path
 from typing import Any
 

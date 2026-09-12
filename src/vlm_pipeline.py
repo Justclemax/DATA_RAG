@@ -1,15 +1,17 @@
 """
-Configuration du pipeline Docling : description des images via Granite
-Vision (Ollama), extraction des tableaux et enrichissement des formules.
+Configuration du pipeline Docling : OCR multilingue via Nemotron,
+description des images via Granite Vision (Ollama), extraction des
+tableaux et enrichissement des formules.
 
-Ce module ne change pas par rapport au script d'origine : Docling
-appelle lui-même l'endpoint OpenAI-compatible d'Ollama pour la
-description d'images (PictureDescriptionApiOptions), ce qui est
-indépendant de Mellea. Seul le nettoyage des formules Mathstral, en
-aval, passe par Mellea (voir `latex_cleaning.py`).
+Le pipeline utilise :
+- Nemotron-OCR pour l'extraction de texte multilingue ;
+- Granite Vision via Ollama pour la description des images ;
+- Docling pour la structure des tableaux ;
+- Mellea/Mathstral en aval pour le nettoyage des formules.
 """
 
 from docling.datamodel.pipeline_options import (
+    NemotronOcrOptions,
     PictureDescriptionApiOptions,
     PdfPipelineOptions,
 )
@@ -20,6 +22,7 @@ from .prompts import VLM_PROMPT
 
 def create_picture_description_options() -> PictureDescriptionApiOptions:
     base_url = str(OLLAMA_URL or "").strip().rstrip("/")
+
     if not base_url or not base_url.startswith(("http://", "https://")):
         raise ValueError(
             "OLLAMA_URL is not configured. Set it in .env or use the default "
@@ -27,6 +30,7 @@ def create_picture_description_options() -> PictureDescriptionApiOptions:
         )
 
     model_name = str(VLM_MODEL or "").strip()
+
     if not model_name:
         raise ValueError(
             "VLM_MODEL is not configured. Set it in .env or use the default "
@@ -49,17 +53,35 @@ def create_picture_description_options() -> PictureDescriptionApiOptions:
 def create_pdf_pipeline_options() -> PdfPipelineOptions:
     return PdfPipelineOptions(
         enable_remote_services=True,
-        do_ocr=False,
 
+        # ========================================================
+        # OCR - Nemotron multilingue
+        # ========================================================
+
+        do_ocr=True,
+
+        ocr_options=NemotronOcrOptions(
+            lang=["multilingual"],
+        ),
+
+        # ========================================================
         # Tables
+        # ========================================================
+
         do_table_structure=True,
 
-        # Images
+        # ========================================================
+        # Images / VLM - Granite Vision via Ollama
+        # ========================================================
+
         generate_picture_images=True,
         do_picture_description=True,
 
-        # Formules
-        do_formula_enrichment=True,
-
         picture_description_options=create_picture_description_options(),
+
+        # ========================================================
+        # Formules
+        # ========================================================
+
+        do_formula_enrichment=True,
     )
