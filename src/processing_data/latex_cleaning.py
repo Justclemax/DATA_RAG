@@ -24,6 +24,7 @@ from mellea.backends.ollama import OllamaModelBackend
 
 from .config import MATH_MODEL, OLLAMA_URL
 from .parallel_executor import parallel_map
+from .prompts import MATH_PROMPT
 from loguru import logger
 
 FORMULA_PATTERN = r"\$\$(.*?)\$\$"
@@ -96,44 +97,16 @@ class CleanedFormula(BaseModel):
 # Appel générative Mellea -> Mathstral
 # ============================================================
 #
-# Le docstring ci-dessous EST le prompt envoyé au modèle (c'est le
-# fonctionnement du décorateur @generative de Mellea : docstring ->
-# prompt, type hints -> schéma de sortie). Il reprend exactement les
-# règles du MATH_PROMPT d'origine.
+# Mellea utilise le docstring comme instruction envoyée au modèle.
+# On garde le prompt centralisé dans prompts.py pour éviter le doublon.
 
 @generative
 def clean_formula_with_mellea(formula: str) -> CleanedFormula:
-    """You are an expert in mathematics and LaTeX.
+    """Clean this LaTeX formula. Remove OCR artefacts and stray '&'. Return valid LaTeX only. Keep the same mathematical meaning."""
+    pass
 
-    Clean the mathematical formula extracted from a scientific PDF.
 
-    Rules:
-    - Return valid LaTeX only.
-    - Preserve the mathematical meaning exactly.
-    - Do not invent missing symbols.
-    - Do not change variables, indexes, coefficients, or equation numbers.
-    - Remove OCR artifacts.
-    - Remove misplaced '&' characters.
-    - Fix malformed LaTeX commands.
-    - Fix broken spaces around subscripts and superscripts.
-    - Correct malformed \\frac, \\sum, \\epsilon, etc.
-    - Keep the original mathematical structure.
-    - Do not explain anything.
-    - Return only the cleaned LaTeX formula, in the `latex` field.
-
-    Example:
-
-    Input:
-    Misplaced &
-
-    $$L _ { SD } = 1 - \\frac { \\sum _ { i = 1 } ^ { t }
-    y _ { i } p _ { i } + \\epsilon }
-    { \\sum _ { i = 1 } ^ { t } y _ { i } + p _ { i } + \\epsilon }
-    \\quad ... (2) $$
-
-    Output latex field:
-    L_{SD} = 1 - \\frac{\\sum_{i=1}^{t} y_i p_i + \\epsilon}{\\sum_{i=1}^{t} y_i + p_i + \\epsilon} \\tag{2}
-    """
+clean_formula_with_mellea.__doc__ = MATH_PROMPT
 
 
 # ============================================================

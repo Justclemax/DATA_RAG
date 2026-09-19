@@ -9,8 +9,8 @@ Usage:
 import argparse
 from pathlib import Path
 
-from src.config import DEFAULT_INPUT_PDF, DEFAULT_OUTPUT_DIR
-from src.document_processor import process_document
+from src.processing_data.config import DEFAULT_INPUT_PDF, DEFAULT_OUTPUT_DIR
+from src.processing_data.document_processor import process_document
 from loguru import logger
 
 def parse_args() -> argparse.Namespace:

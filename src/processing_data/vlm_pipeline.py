@@ -1,19 +1,22 @@
 """
-Configuration du pipeline Docling : OCR multilingue via Nemotron,
+Configuration du pipeline Docling : OCR multiplateforme,
 description des images via Granite Vision (Ollama), extraction des
 tableaux et enrichissement des formules.
 
-Le pipeline utilise :
-- Nemotron-OCR pour l'extraction de texte multilingue ;
-- Granite Vision via Ollama pour la description des images ;
-- Docling pour la structure des tableaux ;
-- Mellea/Mathstral en aval pour le nettoyage des formules.
+Le backend OCR est choisi selon la plateforme pour éviter les erreurs
+liées au support Linux-only de Nemotron sur macOS. Sur macOS, on
+utilise RapidOCR (cross-platform), qui est installé dans l'environnement
+actuel. Sur Linux, on peut conserver Nemotron si le package est
+présent ; sinon le fallback est RapidOCR.
 """
+
+import sys
 
 from docling.datamodel.pipeline_options import (
     NemotronOcrOptions,
     PictureDescriptionApiOptions,
     PdfPipelineOptions,
+    RapidOcrOptions,
 )
 
 from .config import OLLAMA_URL, VLM_MODEL
@@ -51,18 +54,31 @@ def create_picture_description_options() -> PictureDescriptionApiOptions:
 
 
 def create_pdf_pipeline_options() -> PdfPipelineOptions:
+    if sys.platform == "linux":
+        try:
+            import nemotron_ocr.inference.pipeline_v2  # noqa: F401
+
+            ocr_options = NemotronOcrOptions(lang=["multilingual"])
+        except ImportError:
+            ocr_options = RapidOcrOptions(
+                backend="onnxruntime",
+                lang=["chinese", "english"],
+            )
+    else:
+        ocr_options = RapidOcrOptions(
+            backend="onnxruntime",
+            lang=["chinese", "english"],
+        )
+
     return PdfPipelineOptions(
         enable_remote_services=True,
 
         # ========================================================
-        # OCR - Nemotron multilingue
+        # OCR - platform-aware backend
         # ========================================================
 
         do_ocr=True,
-
-        ocr_options=NemotronOcrOptions(
-            lang=["multilingual"],
-        ),
+        ocr_options=ocr_options,
 
         # ========================================================
         # Tables
